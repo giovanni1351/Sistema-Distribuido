@@ -1,31 +1,52 @@
-import zmq
+from typing import Any
+
 import msgpack
+import zmq
+from zmq import SyncSocket
 
 context = zmq.Context()
 socket = context.socket(zmq.REP)
 socket.connect("tcp://broker:5556")
-TAREFAS: list[str] = []
+CANAIS: set[str] = set()
+
+USUARIOS: set[str] = set()
 
 
-def adicionar_tarefa(tarefa: str) -> str:
-    TAREFAS.append(tarefa)
-    return f"Tarefa '{tarefa}' adicionada com sucesso!"
+def criar_usuario(nome_usuario: str, **kargs: Any) -> str:
+    if nome_usuario in USUARIOS:
+        return f"Usuario {nome_usuario} ja cadastrado"
+    USUARIOS.add(nome_usuario)
+    return f"Usuario '{nome_usuario}' adicionada com sucesso!"
 
-def listar_tarefas() -> str:
-    return " ".join(TAREFAS)
 
-def remover_tarefa(tarefa: str) -> str:
-    if tarefa in TAREFAS:
-        TAREFAS.remove(tarefa)
-        return f"Tarefa '{tarefa}' removida com sucesso!"
-    else:
-        return f"Tarefa '{tarefa}' não encontrada."
+def logar_usuario(nome_usuario: str, **kargs: Any) -> str:
+    return (
+        "Usuario logado com sucesso"
+        if nome_usuario in USUARIOS
+        else "Erro ao realizar o login"
+    )
 
-action ={
-    "ADICIONAR": adicionar_tarefa,
-    "LISTAR": listar_tarefas,
-    "REMOVER": remover_tarefa
+
+def criar_canal(nome_canal: str, **kargs: Any) -> str:
+    CANAIS.add(nome_canal)
+    return f"Canal '{nome_canal}' adicionada com sucesso!"
+
+
+def listar_canais(**kargs: Any) -> str:
+    return " ".join(CANAIS)
+
+
+action = {
+    "CRIAR_USUARIO": criar_usuario,
+    "LOGAR_USUARIO": logar_usuario,
+    "CRIAR_CANAL": criar_canal,
+    "LISTAR_CANAIS": listar_canais,
 }
+
+
+def enviar_resposta(socket: SyncSocket, resposta: Any):
+    print(f"Enviado resposta {resposta}")
+    socket.send(msgpack.packb(resposta, use_bin_type=True))
 
 
 while True:
@@ -34,22 +55,22 @@ while True:
 
     try:
         data = msgpack.unpackb(message, raw=False)
-        command = str(data.get("comando", "")).upper()
+        print(data)
+        argumentos = data.get("argumentos", {})
         tarefa = data.get("tarefa")
+        datetime = data.get("datetime", "")
+        print(f"Tarefa ({tarefa}) tipo tarefa ({type(tarefa)})")
 
-        if command in action:
-            if command in ("ADICIONAR", "REMOVER"):
-                if tarefa is None or str(tarefa).strip() == "":
-                    resposta = {"ok": False, "mensagem": "Erro: tarefa obrigatória"}
-                else:
-                    result = action[command](str(tarefa))
-                    resposta = {"ok": True, "mensagem": result}
-            else:
-                result = action[command]()
-                resposta = {"ok": True, "mensagem": result}
-        else:
-            resposta = {"ok": False, "mensagem": "Erro: Comando não reconhecido"}
+        if tarefa not in action.keys():
+            enviar_resposta(
+                socket, {"ok": False, "mensagem": "Erro: Comando não reconhecido"}
+            )
+            continue
+        resposta = action[tarefa](**argumentos)
+        print(f"Resposta gerada pelo servidor {resposta}")
+        enviar_resposta(socket, {"ok": False, "mensagem": resposta})
+
     except Exception as exc:
-        resposta = {"ok": False, "mensagem": f"Erro ao processar MessagePack: {exc}"}
-
-    socket.send(msgpack.packb(resposta, use_bin_type=True))
+        enviar_resposta(
+            socket, {"ok": False, "mensagem": f"Erro ao processar MessagePack: {exc}"}
+        )

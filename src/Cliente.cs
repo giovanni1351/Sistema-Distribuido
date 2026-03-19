@@ -9,11 +9,15 @@ class Program
     [MessagePackObject]
     public class Requisicao
     {
-        [Key("comando")]
-        public string Comando { get; set; } = string.Empty;
+        [Key("argumentos")]
+        public Dictionary<string, string> Argumentos { get; set; } =
+            new Dictionary<string, string> { { "nome_usuario", "giovanni" } };
 
         [Key("tarefa")]
         public string? Tarefa { get; set; }
+
+        [Key("datetime")]
+        public string datetime = DateTime.Now.ToString();
     }
 
     [MessagePackObject]
@@ -26,32 +30,53 @@ class Program
         public string Mensagem { get; set; } = string.Empty;
     }
 
+    public static RequestSocket client = new RequestSocket();
+
     static void Main(string[] args)
     {
         // Inicia o cliente
+        Thread.Sleep(5000);
+        client.Connect("tcp://broker:5555");
         RodarCliente();
     }
 
     static void RodarCliente()
     {
         // O RequestSocket envia requisições
-        Thread.Sleep(9000);
-        var client = new RequestSocket();
-        client.Connect("tcp://broker:5555");
 
         try
         {
             int i = 0;
             while (true)
             {
-                Console.WriteLine(Comunicar("ADICIONAR", $"Tarefa {i}", client));
-                Thread.Sleep(500);
+                Console.WriteLine(
+                    SendComunication(
+                        "CRIAR_USUARIO",
+                        new Dictionary<string, string> { { $"nome_usuario", "Giovanni" } }
+                    )
+                );
+                Thread.Sleep(2000);
 
-                Console.WriteLine(Comunicar("LISTAR", null, client));
-                Thread.Sleep(500);
+                Console.WriteLine(
+                    SendComunication(
+                        "LOGAR_USUARIO",
+                        new Dictionary<string, string> { { $"nome_usuario", "Giovanni" } }
+                    )
+                );
+                Thread.Sleep(2000);
 
-                Console.WriteLine(Comunicar("REMOVER", $"Tarefa {i}", client));
-                Thread.Sleep(500);
+                Console.WriteLine(
+                    SendComunication(
+                        "CRIAR_CANAL",
+                        new Dictionary<string, string> { { $"nome_canal", "Chat1" } }
+                    )
+                );
+                Thread.Sleep(2000);
+
+                Console.WriteLine(
+                    SendComunication("LISTAR_CANAIS", new Dictionary<string, string>())
+                );
+                Thread.Sleep(2000);
 
                 i++;
             }
@@ -64,14 +89,14 @@ class Program
         }
     }
 
-    static string Comunicar(string comando, string? tarefa, RequestSocket cliente)
+    static string SendComunication(string tarefa, Dictionary<string, string> argumentos)
     {
-        var requisicao = new Requisicao { Comando = comando, Tarefa = tarefa };
+        var requisicao = new Requisicao { Argumentos = argumentos, Tarefa = tarefa };
 
         var dados = MessagePackSerializer.Serialize(requisicao);
-        cliente.SendFrame(dados);
+        client.SendFrame(dados);
 
-        var respostaBytes = cliente.ReceiveFrameBytes();
+        var respostaBytes = client.ReceiveFrameBytes();
         var resposta = MessagePackSerializer.Deserialize<Resposta>(respostaBytes);
         return resposta.Mensagem;
     }
