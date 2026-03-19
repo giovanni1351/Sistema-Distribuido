@@ -1,0 +1,31 @@
+# ==========================================
+# Etapa 1: Build (Compilação)
+# ==========================================
+# Usa a imagem oficial do SDK do .NET 8.0 (altere a versão se necessário)
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /app
+
+# Copia apenas o arquivo de projeto (.csproj) primeiro.
+# Isso ajuda o Docker a usar o cache e acelerar a instalação das dependências.
+COPY *.csproj ./
+RUN dotnet restore
+
+# Agora copia o resto do código da sua máquina para o container
+COPY . ./
+
+# Compila o projeto em modo Release e joga a saída para a pasta "out"
+RUN dotnet publish -c Release -o out
+
+# ==========================================
+# Etapa 2: Runtime (Execução)
+# ==========================================
+# Usa a imagem oficial do Runtime (bem menor e mais segura)
+FROM mcr.microsoft.com/dotnet/runtime:10.0
+WORKDIR /app
+
+# Copia os arquivos compilados da etapa anterior ("build") para esta nova imagem
+COPY --from=build /app/out .
+
+# Comando que o container vai executar quando ligar.
+# IMPORTANTE: Substitua "NomeDoSeuProjeto.dll" pelo nome exato do seu arquivo compilado!
+ENTRYPOINT ["dotnet", "src.dll"]
