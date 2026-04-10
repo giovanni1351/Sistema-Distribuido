@@ -1,5 +1,6 @@
 import os
 import pickle
+from datetime import datetime
 from typing import Any
 
 import msgpack
@@ -10,6 +11,10 @@ context = zmq.Context()
 socket = context.socket(zmq.REP)
 socket.connect("tcp://broker:5556")
 
+context_publisher = zmq.Context()
+pub = context.socket(zmq.PUB)
+pub.connect("tcp://proxy:5558")
+
 
 def ler_dados(entidade: str) -> set[str]:
     # 2. Desserializar (Unpickling) - Carregar do arquivo
@@ -19,14 +24,14 @@ def ler_dados(entidade: str) -> set[str]:
 
     with open(os.path.join("entidades", f"{entidade}.pkl"), "rb") as arquivo:
         dados = pickle.load(arquivo)
-        print(f"Lendo os dados da entidade {entidade} do tipo {type(dados)}{dados}")
+        # print(f"Lendo os dados da entidade {entidade} do tipo {type(dados)}{dados}")
         return dados
 
 
 def salvar_dados(entidade: str, dados: Any) -> bool:
     # 1. Serializar (Pickling) - Salvar em um arquivo .pkl
     with open(os.path.join("entidades", f"{entidade}.pkl"), "wb") as arquivo:
-        print(f"Salvando os dados {entidade} {type(dados)} {dados}")
+        # print(f"Salvando os dados {entidade} {type(dados)} {dados}")
         pickle.dump(dados, arquivo)
     return True
 
@@ -46,7 +51,7 @@ def logar_usuario(nome_usuario: str, **kargs: Any) -> str:
     return (
         "Usuario logado com sucesso"
         if usuarios and nome_usuario in usuarios
-        else "Erro ao realizar o login"
+        else f"Erro ao realizar o login o usuario {nome_usuario} não existe"
     )
 
 
@@ -67,11 +72,30 @@ def listar_canais(**kargs: Any) -> str:
     return ", ".join(canais)
 
 
+def publicar_no_canal(nome_canal: str, mensagem: str, **kargs: Any) -> str:
+    canais = ler_dados("canais")
+
+    if not canais:
+        return "Erro: Nenhum canal criado no servidor."
+
+    if nome_canal not in canais:
+        return f"Erro: O canal '{nome_canal}' não existe."
+
+    data = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
+    print(f"Publicando no canal '{nome_canal}' - Data: {data}", flush=True)
+
+    pub.send_string(nome_canal, flags=zmq.SNDMORE)
+    pub.send_string(mensagem)
+
+    return f"Mensagem publicada com sucesso no canal '{nome_canal}'!"
+
+
 action = {
     "CRIAR_USUARIO": criar_usuario,
     "LOGAR_USUARIO": logar_usuario,
     "CRIAR_CANAL": criar_canal,
     "LISTAR_CANAIS": listar_canais,
+    "PUBLICAR_NO_CANAL": publicar_no_canal,
 }
 
 
@@ -86,11 +110,11 @@ while True:
 
     try:
         data = msgpack.unpackb(message, raw=False)
-        print(data)
+        print(f"Dados recebidos {data}")
         argumentos = data.get("argumentos", {})
         tarefa = data.get("tarefa")
-        datetime = data.get("datetime", "")
-        print(f"Tarefa ({tarefa}) tipo tarefa ({type(tarefa)})")
+        datetime_recebido = data.get("datetime", "")
+        # print(f"Tarefa ({tarefa}) tipo tarefa ({type(tarefa)})")
 
         if tarefa not in action.keys():
             enviar_resposta(
@@ -98,8 +122,8 @@ while True:
             )
             continue
         resposta = action[tarefa](**argumentos)
-        print(f"Resposta gerada pelo servidor {resposta}")
-        enviar_resposta(socket, {"ok": False, "mensagem": resposta})
+        # print(f"Resposta gerada pelo servidor {resposta}")
+        enviar_resposta(socket, {"ok": True, "mensagem": resposta})
 
     except Exception as exc:
         enviar_resposta(

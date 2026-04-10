@@ -1,1 +1,15 @@
 bin/
+
+# Ignorar pastas de build locais do .NET
+bin/
+obj/
+
+# Ignorar pastas do Git e editores
+.git/
+.vscode/
+.vs/
+
+# Ignorar arquivos de ambiente ou locais
+*.user
+*.suo
+*.env

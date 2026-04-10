@@ -1,0 +1,30 @@
+# ==========================================
+# Etapa 1: Build (Compilação)
+# ==========================================
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /app
+
+# Copia apenas o arquivo de projeto (.csproj) primeiro.
+COPY *.csproj ./
+
+# Restaura as dependências usando o cache do Docker.
+# Se o .csproj não mudar, o Docker pula essa etapa nas próximas builds!
+RUN dotnet restore
+
+# Copia o restante do código fonte
+COPY . ./
+
+# Compila o projeto. 
+# A flag --no-restore é CRUCIAL aqui para poupar tempo, pois o restore já foi feito no passo anterior.
+RUN dotnet publish -c Release -o out --no-restore
+
+# ==========================================
+# Etapa 2: Runtime (Execução)
+# ==========================================
+FROM mcr.microsoft.com/dotnet/runtime:10.0
+WORKDIR /app
+
+# Copia apenas os binários compilados
+COPY --from=build /app/out .
+
+ENTRYPOINT ["dotnet", "src.dll"]
