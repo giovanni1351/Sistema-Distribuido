@@ -31,6 +31,7 @@ class Program
     }
 
     public static RequestSocket client = new RequestSocket();
+    public static SubscriberSocket subSocket = new SubscriberSocket();
 
     public static List<string> nomes = new List<string>
     {
@@ -46,9 +47,12 @@ class Program
         "Canal_de_Futebol",
         "Canal_de_moda",
         "Canal_de_noticias",
-        "Canal_de_jogos eletronicos",
+        "Canal_de_jogose_letronicos",
         "Canal_de_Basquete",
+        "Canal_de_Minecraft",
+        "Canal_de_CounterStrike",
     };
+    public static List<string> canaisInscritos = new List<string>();
     public static List<string> mensagens_pub_sub = new List<string>
     {
         "Bom dia pessoal",
@@ -71,6 +75,7 @@ class Program
         // Inicia o cliente
         Thread.Sleep(5000);
         client.Connect("tcp://broker:5555");
+        subSocket.Connect("tcp://proxy:5557");
         RodarCliente();
     }
 
@@ -164,104 +169,75 @@ class Program
 
     static void IniciarEscuta()
     {
-        using (var subSocket = new SubscriberSocket())
+        subSocket.Connect("tcp://localhost:5558");
+        string respostaCanais = SendComunication("LISTAR_CANAIS", new Dictionary<string, string>());
+        string[] canaisCriados = respostaCanais.Split(',');
+        Console.WriteLine(canaisCriados);
+
+        while (canaisCriados.Length < 5)
         {
-            subSocket.Connect("tcp://localhost:5558");
+            respostaCanais = SendComunication("LISTAR_CANAIS", new Dictionary<string, string>());
+            canaisCriados = respostaCanais.Split(',');
+            Console.WriteLine("Menos de 5 canais ativos no servidor. Criando um novo...");
+            criar_canal();
+        }
+        int mensagensEnviadas = 10;
+        string canalAtualEnvio = "";
+        DateTime ultimaMensagem = DateTime.MinValue;
 
-            List<string> canaisInscritos = new List<string>();
+        Console.WriteLine("Escuta iniciada. Entrando no loop infinito...");
 
-            // 1. Se existirem menos do que 5 canais, criar um novo
-            // Fazemos a requisição via REQ para saber quantos existem no backend.
-            string respostaCanais = SendComunication(
-                "LISTAR_CANAIS",
-                new Dictionary<string, string>()
-            );
-
-            // ATENÇÃO: Ajuste a forma de separar (Split) de acordo com como seu Python retorna essa lista.
-            // Aqui estou assumindo que ele retorna uma string separada por vírgulas.
-            int qtdCanaisServidor = string.IsNullOrWhiteSpace(respostaCanais)
-                ? 0
-                : respostaCanais.Split(',').Length;
-
-            if (qtdCanaisServidor < 5)
+        while (true)
+        {
+            if (
+                subSocket.TryReceiveFrameString(
+                    TimeSpan.FromMilliseconds(50),
+                    out string topicoRecebido
+                )
+            )
             {
-                Console.WriteLine(
-                    "[SISTEMA] Menos de 5 canais ativos no servidor. Criando um novo..."
-                );
-                criar_canal();
+                string mensagemRecebida = subSocket.ReceiveFrameString();
+                Console.WriteLine($"[RECEBIDO via {topicoRecebido}]: {mensagemRecebida}");
             }
 
-            // Variáveis de controle para o envio de mensagens no loop
-            int mensagensEnviadas = 10; // Começamos em 10 para forçar a escolha do 1º canal logo no início do loop
-            string canalAtualEnvio = "";
-            DateTime ultimaMensagem = DateTime.MinValue;
-
-            Console.WriteLine("[SISTEMA] Escuta iniciada. Entrando no loop infinito...");
-
-            while (true)
+            if (canaisInscritos.Count < 3)
             {
-                // --- PARTE 1: LER MENSAGENS (Sem travar a thread) ---
-                // Tenta ler por 50 milissegundos. Se não chegar nada, ele passa direto e continua o loop.
-                if (
-                    subSocket.TryReceiveFrameString(
-                        TimeSpan.FromMilliseconds(50),
-                        out string topicoRecebido
-                    )
-                )
+                string novoCanal = canaisCriados[random.Next(canaisCriados.Length)].Trim();
+
+                // Valida para não se inscrever no mesmo canal duas vezes
+                if (!canaisInscritos.Contains(novoCanal))
                 {
-                    string mensagemRecebida = subSocket.ReceiveFrameString();
-                    Console.WriteLine($"[RECEBIDO via {topicoRecebido}]: {mensagemRecebida}");
+                    subSocket.Subscribe(novoCanal);
+                    canaisInscritos.Add(novoCanal);
+                    Console.WriteLine($"O Bot se inscreveu no canal: {novoCanal}");
                 }
-
-                // --- PARTE 2: GERENCIAR INSCRIÇÕES ---
-                // Se o bot estiver inscrito em menos do que 3 canais, ele escolhe mais um
-                if (canaisInscritos.Count < 3)
-                {
-                    string novoCanal = nomes_canais[random.Next(nomes_canais.Count)];
-
-                    // Valida para não se inscrever no mesmo canal duas vezes
-                    if (!canaisInscritos.Contains(novoCanal))
+            }
+            if (mensagensEnviadas >= 10)
+            {
+                canalAtualEnvio = canaisCriados[random.Next(canaisCriados.Length)].Trim();
+                mensagensEnviadas = 0;
+                Console.WriteLine(
+                    $"\nNovo ciclo: Escolhido o canal '{canalAtualEnvio}' para publicações."
+                );
+            }
+            if ((DateTime.Now - ultimaMensagem).TotalSeconds >= 1 && mensagensEnviadas < 10)
+            {
+                string msg = mensagens_pub_sub[random.Next(mensagens_pub_sub.Count)];
+                var sucesso = SendComunication(
+                    "PUBLICAR_NO_CANAL",
+                    new Dictionary<string, string>
                     {
-                        subSocket.Subscribe(novoCanal);
-                        canaisInscritos.Add(novoCanal);
-                        Console.WriteLine($"[SISTEMA] O Bot se inscreveu no canal: {novoCanal}");
+                        { "nome_canal", canalAtualEnvio },
+                        { "mensagem", msg },
                     }
-                }
+                );
 
-                // --- PARTE 3: CICLO DE 10 MENSAGENS (Intervalo de 1s) ---
-                // Escolhe um novo canal caso já tenha enviado as 10 mensagens
-                if (mensagensEnviadas >= 10)
-                {
-                    canalAtualEnvio = nomes_canais[random.Next(nomes_canais.Count)];
-                    mensagensEnviadas = 0;
-                    Console.WriteLine(
-                        $"\n[SISTEMA] Novo ciclo: Escolhido o canal '{canalAtualEnvio}' para publicações."
-                    );
-                }
+                Console.WriteLine(
+                    $"[ENVIADO p/ {canalAtualEnvio}]: {msg} ({mensagensEnviadas + 1}/10) Retorno {sucesso}"
+                );
 
-                // Envia 1 mensagem se já se passou 1 segundo desde o último envio
-                if ((DateTime.Now - ultimaMensagem).TotalSeconds >= 1 && mensagensEnviadas < 10)
-                {
-                    string msg = mensagens_pub_sub[random.Next(mensagens_pub_sub.Count)];
-
-                    // Usamos o socket REQ (client) para pedir ao servidor que publique a mensagem na rede.
-                    // IMPORTANTE: Ajuste a tarefa "PUBLICAR_MENSAGEM" para o nome que você usou no seu Python.
-                    var sucesso = SendComunication(
-                        "PUBLICAR_NO_CANAL",
-                        new Dictionary<string, string>
-                        {
-                            { "nome_canal", canalAtualEnvio },
-                            { "mensagem", msg },
-                        }
-                    );
-
-                    Console.WriteLine(
-                        $"[ENVIADO p/ {canalAtualEnvio}]: {msg} ({mensagensEnviadas + 1}/10) Retorno {sucesso}"
-                    );
-
-                    mensagensEnviadas++;
-                    ultimaMensagem = DateTime.Now;
-                }
+                mensagensEnviadas++;
+                ultimaMensagem = DateTime.Now;
             }
         }
     }

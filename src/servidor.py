@@ -1,7 +1,6 @@
 import os
 import pickle
-from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 import msgpack
 import zmq
@@ -16,11 +15,11 @@ pub = context.socket(zmq.PUB)
 pub.connect("tcp://proxy:5558")
 
 
-def ler_dados(entidade: str) -> set[str]:
+def ler_dados[T: list | set](entidade: str, container: Callable[[], T] = set) -> T:
     # 2. Desserializar (Unpickling) - Carregar do arquivo
     if not os.path.exists(os.path.join("entidades", f"{entidade}.pkl")):
         os.makedirs(os.path.join("entidades"), exist_ok=True)
-        salvar_dados(entidade, set())
+        salvar_dados(entidade, container())
 
     with open(os.path.join("entidades", f"{entidade}.pkl"), "rb") as arquivo:
         dados = pickle.load(arquivo)
@@ -74,18 +73,22 @@ def listar_canais(**kargs: Any) -> str:
 
 def publicar_no_canal(nome_canal: str, mensagem: str, **kargs: Any) -> str:
     canais = ler_dados("canais")
-
     if not canais:
         return "Erro: Nenhum canal criado no servidor."
 
     if nome_canal not in canais:
         return f"Erro: O canal '{nome_canal}' não existe."
 
-    data = datetime.now().strftime("%d/%m/%Y, %H:%M:%S")
-    print(f"Publicando no canal '{nome_canal}' - Data: {data}", flush=True)
+    # data = bytes(datetime.now().strftime("%d/%m/%Y, %H:%M:%S"), encoding="utf-8")
+    # mensagem = message + data
+
+    # print(f"Publicando no canal '{nome_canal}' - Data: {data}", flush=True)
 
     pub.send_string(nome_canal, flags=zmq.SNDMORE)
     pub.send_string(mensagem)
+    mensagens: list = ler_dados("mensagens", list)
+    mensagens.append(mensagem)
+    salvar_dados("mensagens", mensagens)
 
     return f"Mensagem publicada com sucesso no canal '{nome_canal}'!"
 
@@ -106,11 +109,11 @@ def enviar_resposta(socket: SyncSocket, resposta: Any):
 
 while True:
     message = socket.recv()
-    print(f"Mensagem recebida: {message}", flush=True)
+    # print(f"Mensagem recebida: {message}", flush=True)
 
     try:
         data = msgpack.unpackb(message, raw=False)
-        print(f"Dados recebidos {data}")
+        # print(f"Dados recebidos {data}")
         argumentos = data.get("argumentos", {})
         tarefa = data.get("tarefa")
         datetime_recebido = data.get("datetime", "")
@@ -126,6 +129,7 @@ while True:
         enviar_resposta(socket, {"ok": True, "mensagem": resposta})
 
     except Exception as exc:
+        print(exc)
         enviar_resposta(
             socket, {"ok": False, "mensagem": f"Erro ao processar MessagePack: {exc}"}
         )

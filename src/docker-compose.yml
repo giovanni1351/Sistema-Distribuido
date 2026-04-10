@@ -39,8 +39,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cliente
-
     depends_on:
       - servidor
     deploy:
-      replicas: 3
+      replicas: 1
