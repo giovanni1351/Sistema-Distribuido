@@ -10,6 +10,7 @@ services:
     ports:
       - 5555:5555
       - 5556:5556
+
   proxy:
     build:
       context: .
@@ -22,6 +23,17 @@ services:
       - 5557:5557
       - 5558:5558
 
+  referencia:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cc7261:pyzmq
+    container_name: referencia
+    volumes:
+      - ./referencia.py:/app/main.py
+    ports:
+      - 5559:5559
+
   servidor:
     build:
       context: .
@@ -29,9 +41,12 @@ services:
     image: cc7261:pyzmq
     volumes:
       - ./servidor.py:/app/main.py
+    environment:
+      - SERVIDOR_NOME=servidor
     depends_on:
       - broker
       - proxy
+      - referencia
     deploy:
       replicas: 1
 

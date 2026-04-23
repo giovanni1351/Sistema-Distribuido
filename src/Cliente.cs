@@ -18,6 +18,9 @@ class Program
 
         [Key("datetime")]
         public string datetime = DateTime.Now.ToString();
+
+        [Key("relogio")]
+        public int Relogio { get; set; } = 0;
     }
 
     [MessagePackObject]
@@ -28,10 +31,15 @@ class Program
 
         [Key("mensagem")]
         public string Mensagem { get; set; } = string.Empty;
+
+        [Key("relogio")]
+        public int Relogio { get; set; } = 0;
     }
 
     public static RequestSocket client = new RequestSocket();
     public static SubscriberSocket subSocket = new SubscriberSocket();
+
+    public static int relogioLogico = 0;
 
     public static List<string> nomes = new List<string>
     {
@@ -109,13 +117,28 @@ class Program
 
     static string SendComunication(string tarefa, Dictionary<string, string> argumentos)
     {
-        var requisicao = new Requisicao { Argumentos = argumentos, Tarefa = tarefa };
+        // Incrementar relógio lógico antes de enviar
+        relogioLogico++;
+        var requisicao = new Requisicao
+        {
+            Argumentos = argumentos,
+            Tarefa = tarefa,
+            datetime = DateTime.Now.ToString(),
+            Relogio = relogioLogico,
+        };
+
+        Console.WriteLine($"[relogio={relogioLogico}] Enviando tarefa={tarefa}");
 
         var dados = MessagePackSerializer.Serialize(requisicao);
         client.SendFrame(dados);
 
         var respostaBytes = client.ReceiveFrameBytes();
         var resposta = MessagePackSerializer.Deserialize<Resposta>(respostaBytes);
+
+        // Atualizar relógio lógico com o valor recebido
+        relogioLogico = Math.Max(relogioLogico, resposta.Relogio);
+        Console.WriteLine($"[relogio={relogioLogico}] Resposta recebida tarefa={tarefa}");
+
         return resposta.Mensagem;
     }
 
@@ -169,7 +192,6 @@ class Program
 
     static void IniciarEscuta()
     {
-        subSocket.Connect("tcp://localhost:5558");
         string respostaCanais = SendComunication("LISTAR_CANAIS", new Dictionary<string, string>());
         string[] canaisCriados = respostaCanais.Split(',');
         Console.WriteLine(canaisCriados);
