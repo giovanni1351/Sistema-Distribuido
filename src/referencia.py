@@ -18,33 +18,37 @@ proximo_rank = 1
 logical_clock = 0
 
 
-def obter_rank(nome: str, **kargs: Any) -> dict:
+def obter_rank(nome: str, host: str = "", **kargs: Any) -> dict:
     global proximo_rank
     if nome not in servidores:
-        servidores[nome] = {"rank": proximo_rank, "last_heartbeat": time.time()}
-        print(f"Servidor '{nome}' registrado com rank {proximo_rank}", flush=True)
+        servidores[nome] = {"rank": proximo_rank, "last_heartbeat": time.time(), "host": host}
+        print(f"Servidor '{nome}' registrado com rank {proximo_rank} host '{host}'", flush=True)
         proximo_rank += 1
     else:
         servidores[nome]["last_heartbeat"] = time.time()
+        if host:
+            servidores[nome]["host"] = host
         print(f"Servidor '{nome}' ja registrado, rank {servidores[nome]['rank']}", flush=True)
     return {"rank": servidores[nome]["rank"]}
 
 
 def listar_servidores(**kargs: Any) -> dict:
     remover_inativos()
-    lista = [{"nome": nome, "rank": info["rank"]} for nome, info in servidores.items()]
+    lista = [{"nome": nome, "rank": info["rank"], "host": info.get("host", "")} for nome, info in servidores.items()]
     print(f"Listando servidores: {lista}", flush=True)
     return {"servidores": lista}
 
 
-def heartbeat(nome: str, **kargs: Any) -> dict:
+def heartbeat(nome: str, host: str = "", **kargs: Any) -> dict:
     if nome in servidores:
         servidores[nome]["last_heartbeat"] = time.time()
+        if host:
+            servidores[nome]["host"] = host
         print(f"Heartbeat recebido de '{nome}'", flush=True)
     else:
         # servidor nao cadastrado ainda, registrar
         global proximo_rank
-        servidores[nome] = {"rank": proximo_rank, "last_heartbeat": time.time()}
+        servidores[nome] = {"rank": proximo_rank, "last_heartbeat": time.time(), "host": host}
         print(f"Servidor '{nome}' registrado via heartbeat com rank {proximo_rank}", flush=True)
         proximo_rank += 1
     return {"mensagem": "OK"}
@@ -69,11 +73,12 @@ action = {
 }
 
 
-def enviar_resposta(socket: SyncSocket, resposta: Any):
+def enviar_resposta(socket: SyncSocket, resposta: Any, com_datetime: bool = True):
     global logical_clock
     logical_clock += 1
     resposta["relogio"] = logical_clock
-    resposta["datetime"] = datetime.now().isoformat()
+    if com_datetime:
+        resposta["datetime"] = datetime.now().isoformat()
     print(f"Enviando resposta {resposta}", flush=True)
     socket.send(msgpack.packb(resposta, use_bin_type=True))
 
@@ -99,7 +104,8 @@ while True:
 
         resposta = action[tarefa](**argumentos)
         resposta["ok"] = True
-        enviar_resposta(socket, resposta)
+        com_datetime = tarefa != "HEARTBEAT"
+        enviar_resposta(socket, resposta, com_datetime=com_datetime)
 
     except Exception as exc:
         enviar_resposta(socket, {"ok": False, "mensagem": f"Erro ao processar: {exc}"})

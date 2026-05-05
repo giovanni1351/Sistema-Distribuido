@@ -41,14 +41,12 @@ services:
     image: cc7261:pyzmq
     volumes:
       - ./servidor.py:/app/main.py
-    environment:
-      - SERVIDOR_NOME=servidor
     depends_on:
       - broker
       - proxy
       - referencia
     deploy:
-      replicas: 1
+      replicas: 3
 
   cliente:
     build:
