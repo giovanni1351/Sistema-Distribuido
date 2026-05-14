@@ -30,6 +30,7 @@ mensagens_desde_heartbeat = 0
 mensagens_desde_sincronizacao = 0
 coordenador = None  # nome do servidor eleito como coordenador
 eleicao_pendente = False  # flag para disparar eleição no próximo ciclo do loop
+replicando = False  # flag para evitar loop infinito de replicação
 
 
 def incrementar_e_enviar_ref(tarefa: str, argumentos: dict) -> dict:
@@ -93,6 +94,61 @@ def enviar_p2p(host: str, porta: int, tarefa: str, argumentos: dict) -> dict | N
 
     tmp.close()
     return resposta
+
+
+def replicar_operacao(tarefa: str, argumentos: dict):
+    """Propaga operação de escrita para todos os outros servidores ativos via P2P."""
+    global relogio_logico
+    try:
+        resposta_list = incrementar_e_enviar_ref("LIST", {})
+        servidores = resposta_list.get("servidores", [])
+    except Exception as e:
+        print(f"[{NOME_SERVIDOR}] Erro ao listar servidores para replicação: {e}", flush=True)
+        return
+
+    for servidor in servidores:
+        if servidor["nome"] == NOME_SERVIDOR:
+            continue
+        porta = porta_do_rank(servidor["rank"])
+        host = servidor.get("host", servidor["nome"])
+        print(f"[{NOME_SERVIDOR}] Replicando {tarefa} para {servidor['nome']} ({host}:{porta})", flush=True)
+        enviar_p2p(host, porta, tarefa, argumentos)
+
+
+def solicitar_estado_completo() -> bool:
+    """Solicita o estado completo de outro servidor para sincronização inicial."""
+    global relogio_logico, coordenador
+    try:
+        resposta_list = incrementar_e_enviar_ref("LIST", {})
+        servidores = resposta_list.get("servidores", [])
+        if not servidores:
+            return False
+
+        # Tenta obter do coordenador; se não houver, pega o primeiro disponível
+        alvo = next((s for s in servidores if s["nome"] == coordenador), None)
+        if alvo is None:
+            alvo = next((s for s in servidores if s["nome"] != NOME_SERVIDOR), None)
+        if alvo is None:
+            return False  # sou o único servidor
+
+        porta = porta_do_rank(alvo["rank"])
+        host = alvo.get("host", alvo["nome"])
+        print(f"[{NOME_SERVIDOR}] Solicitando estado completo de {alvo['nome']} ({host}:{porta})", flush=True)
+
+        resposta = enviar_p2p(host, porta, "OBTER_ESTADO", {})
+        if resposta and resposta.get("ok"):
+            estado = resposta.get("estado", {})
+            if "usuarios" in estado:
+                salvar_dados("usuarios", set(estado["usuarios"]))
+            if "canais" in estado:
+                salvar_dados("canais", set(estado["canais"]))
+            if "mensagens" in estado:
+                salvar_dados("mensagens", list(estado["mensagens"]))
+            print(f"[{NOME_SERVIDOR}] Estado completo recebido e restaurado de {alvo['nome']}", flush=True)
+            return True
+    except Exception as e:
+        print(f"[{NOME_SERVIDOR}] Erro ao solicitar estado completo: {e}", flush=True)
+    return False
 
 
 def sincronizar_relogio_com_coordenador() -> bool:
@@ -198,18 +254,24 @@ def ler_dados[T: list | set](entidade: str, container: Callable[[], T] = set) ->
 
 
 def salvar_dados(entidade: str, dados: Any) -> bool:
+    os.makedirs(os.path.join("entidades"), exist_ok=True)
     with open(os.path.join("entidades", f"{entidade}.pkl"), "wb") as arquivo:
         pickle.dump(dados, arquivo)
     return True
 
 
 def criar_usuario(nome_usuario: str, **kargs: Any) -> str:
+    global replicando
     usuarios = ler_dados("usuarios")
 
     if usuarios and nome_usuario in usuarios:
         return f"Usuario {nome_usuario} ja cadastrado"
     usuarios.add(nome_usuario)
     salvar_dados("usuarios", usuarios)
+
+    if not replicando:
+        replicar_operacao("REPLICAR_USUARIO", {"nome_usuario": nome_usuario})
+
     return f"Usuario '{nome_usuario}' adicionada com sucesso!"
 
 
@@ -223,12 +285,17 @@ def logar_usuario(nome_usuario: str, **kargs: Any) -> str:
 
 
 def criar_canal(nome_canal: str, **kargs: Any) -> str:
+    global replicando
     canais = ler_dados("canais")
     if canais and nome_canal in canais:
         return f"O Canal {nome_canal} ja foi criado!"
 
     canais.add(nome_canal)
     salvar_dados("canais", canais)
+
+    if not replicando:
+        replicar_operacao("REPLICAR_CANAL", {"nome_canal": nome_canal})
+
     return f"Canal '{nome_canal}' adicionada com sucesso!"
 
 
@@ -240,6 +307,7 @@ def listar_canais(**kargs: Any) -> str:
 
 
 def publicar_no_canal(nome_canal: str, mensagem: str, **kargs: Any) -> str:
+    global replicando
     canais = ler_dados("canais")
     if not canais:
         return "Erro: Nenhum canal criado no servidor."
@@ -252,6 +320,9 @@ def publicar_no_canal(nome_canal: str, mensagem: str, **kargs: Any) -> str:
     mensagens: list = ler_dados("mensagens", list)
     mensagens.append(mensagem)
     salvar_dados("mensagens", mensagens)
+
+    if not replicando:
+        replicar_operacao("REPLICAR_MENSAGEM", {"nome_canal": nome_canal, "mensagem": mensagem})
 
     return f"Mensagem publicada com sucesso no canal '{nome_canal}'!"
 
@@ -341,7 +412,7 @@ def processar_mensagem_cliente(message: bytes):
 
 def processar_mensagem_p2p(message: bytes):
     """Processa mensagem recebida de outro servidor via socket P2P."""
-    global relogio_logico, coordenador
+    global relogio_logico, coordenador, replicando
 
     try:
         data = msgpack.unpackb(message, raw=False)
@@ -374,6 +445,37 @@ def processar_mensagem_p2p(message: bytes):
             global eleicao_pendente
             eleicao_pendente = True
 
+        elif tarefa == "OBTER_ESTADO":
+            # State transfer: responde com todo o estado serializável
+            estado = {
+                "usuarios": list(ler_dados("usuarios")),
+                "canais": list(ler_dados("canais")),
+                "mensagens": ler_dados("mensagens", list),
+            }
+            enviar_resposta(p2p_socket, {"ok": True, "estado": estado})
+
+        elif tarefa in ("REPLICAR_USUARIO", "REPLICAR_CANAL", "REPLICAR_MENSAGEM"):
+            global replicando
+            replicando = True
+            try:
+                if tarefa == "REPLICAR_USUARIO":
+                    nome_usuario = argumentos.get("nome_usuario", "")
+                    criar_usuario(nome_usuario)
+                    print(f"[{NOME_SERVIDOR}] Réplica aplicada: usuário '{nome_usuario}'", flush=True)
+                elif tarefa == "REPLICAR_CANAL":
+                    nome_canal = argumentos.get("nome_canal", "")
+                    criar_canal(nome_canal)
+                    print(f"[{NOME_SERVIDOR}] Réplica aplicada: canal '{nome_canal}'", flush=True)
+                elif tarefa == "REPLICAR_MENSAGEM":
+                    mensagem = argumentos.get("mensagem", "")
+                    mensagens = ler_dados("mensagens", list)
+                    mensagens.append(mensagem)
+                    salvar_dados("mensagens", mensagens)
+                    print(f"[{NOME_SERVIDOR}] Réplica aplicada: mensagem '{mensagem[:30]}...'", flush=True)
+            finally:
+                replicando = False
+            enviar_resposta(p2p_socket, {"ok": True})
+
         else:
             enviar_resposta(p2p_socket, {"ok": False, "mensagem": "Erro: Comando P2P não reconhecido"})
 
@@ -394,6 +496,10 @@ sub_coord = context.socket(zmq.SUB)
 sub_coord.connect("tcp://proxy:5557")
 sub_coord.setsockopt_string(zmq.SUBSCRIBE, "servers")
 poller.register(sub_coord, zmq.POLLIN)
+
+# Tentar obter estado completo de outro servidor ao iniciar (state transfer)
+print(f"[{NOME_SERVIDOR}] Tentando sincronizar estado com servidores existentes...", flush=True)
+solicitar_estado_completo()
 
 while True:
     eventos = dict(poller.poll())

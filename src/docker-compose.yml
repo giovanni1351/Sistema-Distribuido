@@ -46,7 +46,7 @@ services:
       - proxy
       - referencia
     deploy:
-      replicas: 3
+      replicas: 9
 
   cliente:
     build:
@@ -55,4 +55,4 @@ services:
     depends_on:
       - servidor
     deploy:
-      replicas: 1
+      replicas: 9
